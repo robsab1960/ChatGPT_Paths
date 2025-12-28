@@ -1,0 +1,6 @@
+START
+START A
+A B
+B C
+C D
+END

@@ -1,0 +1,10 @@
+START
+START A
+START B
+A C
+B C
+C D
+D E
+E F
+F END
+END

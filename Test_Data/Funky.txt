@@ -1,0 +1,22 @@
+ST
+ST A
+ST B
+ST C
+ST D
+A B
+B A
+A C
+C A
+A D
+D A
+B C
+C B
+B D
+D B
+C D
+D C
+A END
+B END
+C END
+D END
+END
