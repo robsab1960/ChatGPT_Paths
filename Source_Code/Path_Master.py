@@ -1,13 +1,12 @@
-# Version 52
+# Version 53
 #
-# Adds --validate option.
-#   --validate runs BOTH algorithms (linear + enumeration) and compares invariants:
-#     - cyclomatic complexity on the START->END relevant subgraph (reachable from START and can reach END)
-#     - number of basis paths equals cyclomatic complexity
-#     - every basis path is a valid START->END path using existing edges
+# Improves --validate behavior when enumeration hits search limits.
+#   - Always prints the LINEAR summary.
+#   - If enumeration completes: prints both summaries and PASS/FAIL.
+#   - If enumeration is stopped by --max-* limits: prints enumeration status + INCONCLUSIVE.
 #
 # Notes:
-#   - Enumeration can still be expensive; use --max-seconds/--max-calls/--max-paths if needed.
+#   - Enumeration can still be expensive; use --max-seconds/--max-calls/--max-paths.
 #   - Linear mode remains available via --linear for scalable runs.
 
 import sys
@@ -443,32 +442,58 @@ if __name__ == "__main__":
         cfg.max_paths = args.max_paths
 
         if args.validate:
-            # Linear algorithm first (fast)
-            basis_linear = cfg.find_basis_set_linear(start, end)
+            # Compute expected complexity on the relevant subgraph
             allowed, allowed_edges = cfg.relevant_subgraph(start, end)
             Vp = len(allowed)
             Ep = len(allowed_edges)
             expected = Ep - Vp + 2
 
-            # Enumeration algorithm (may be slow)
-            basis_enum = cfg.find_basis_set(start, end)
+            # 1) Linear algorithm first (fast)
+            basis_linear = cfg.find_basis_set_linear(start, end)
 
-            ok = True
-
+            # Validate linear invariants
+            ok_linear = True
             if len(basis_linear) != expected:
                 print(f"[FAIL] Linear basis size {len(basis_linear)} != expected {expected}")
-                ok = False
-
-            if len(basis_enum) != expected:
-                print(f"[FAIL] Enumeration basis size {len(basis_enum)} != expected {expected} (try larger --max-* limits?)")
-                ok = False
+                ok_linear = False
 
             edge_set = cfg.edges
             for i, p in enumerate(basis_linear, 1):
                 if not (p and p[0] == start and p[-1] == end and ControlFlowGraph._is_valid_path(p, edge_set)):
                     print(f"[FAIL] Linear basis path {i} is not a valid START->END path.")
-                    ok = False
+                    ok_linear = False
                     break
+
+            # Always show linear summary
+            _print_summary("LINEAR ALGORITHM (relevant subgraph)", Vp, Ep, expected, len(basis_linear))
+
+            # 2) Enumeration algorithm (may be slow). Catch limits and report INCONCLUSIVE.
+            enum_completed = False
+            enum_error = None
+            basis_enum = None
+
+            try:
+                basis_enum = cfg.find_basis_set(start, end)
+                enum_completed = True
+            except SearchLimitReached as e:
+                enum_completed = False
+                enum_error = str(e)
+
+            if not enum_completed:
+                print("=== ENUMERATION ALGORITHM ===")
+                print(f"Status: INCOMPLETE ({enum_error})")
+                print(f"Progress so far: calls={cfg.dfs_calls}, paths_found={len(cfg.paths)}")
+                if ok_linear:
+                    print("Validation result: INCONCLUSIVE (enumeration did not complete within limits)")
+                else:
+                    print("Validation result: FAIL (linear invariants failed; enumeration did not complete)")
+                sys.exit(1 if not ok_linear else 2)
+
+            # Enumeration completed: validate and show summary
+            ok = ok_linear
+            if len(basis_enum) != expected:
+                print(f"[FAIL] Enumeration basis size {len(basis_enum)} != expected {expected}")
+                ok = False
 
             for i, p in enumerate(basis_enum, 1):
                 if not (p and p[0] == start and p[-1] == end and ControlFlowGraph._is_valid_path(p, edge_set)):
@@ -476,7 +501,6 @@ if __name__ == "__main__":
                     ok = False
                     break
 
-            _print_summary("LINEAR ALGORITHM (relevant subgraph)", Vp, Ep, expected, len(basis_linear))
             _print_summary("ENUMERATION ALGORITHM (relevant expected)", Vp, Ep, expected, len(basis_enum))
 
             if ok:
@@ -502,6 +526,7 @@ if __name__ == "__main__":
         print(f"Number of Basis Paths Found: {cfg.basis_path_count}")
 
     except SearchLimitReached as e:
+        # Non-validate runs still use the global handler
         print(f"Stopped early due to search limits: {e}")
         calls = getattr(cfg, "dfs_calls", 0) if cfg is not None else 0
         paths_found = len(getattr(cfg, "paths", [])) if cfg is not None else 0
