@@ -1,16 +1,14 @@
-# Version 50
+# Version 51
 #
-# Adds safe guard-rails for path explosion:
-#   --max-seconds  Stop DFS after N seconds
-#   --max-calls    Stop DFS after N recursive calls
-#   --max-paths    Stop DFS after N paths found
-# All limits are optional. When a limit is hit, the program exits gracefully with a clear message.
+# Adds --linear option to compute a basis set of paths without enumerating all paths.
+#   Default (no flag): enumeration-based DFS (can be exponential; guarded by --max-* limits).
+#   --linear: O(E+V) spanning-tree + chord construction (scales to large graphs).
 
 import sys
 import re
 import time
 import argparse
-from collections import defaultdict
+from collections import defaultdict, deque
 
 
 class SearchLimitReached(Exception):
@@ -20,30 +18,36 @@ class SearchLimitReached(Exception):
 
 class ControlFlowGraph:
     def __init__(self, verbose: bool = False):
-        # Initialize the graph as a dictionary of adjacency lists
-        self.graph = defaultdict(list)
-        self.edges = set()  # Store unique edges
-        self.nodes = set()  # Store unique nodes
-        self.paths = []  # List to store all found paths
+        # Graph representation
+        self.graph = defaultdict(list)  # adjacency list (directed)
+        self.edges = set()              # unique directed edges
+        self.nodes = set()              # unique nodes
+
+        # Path enumeration outputs (enumeration mode only)
+        self.paths = []                 # all found START->END paths (can be huge)
 
         # Verbose tracing controls
         self.verbose = verbose
-        self.dfs_calls = 0  # counts recursive DFS calls (useful for diagnosing path explosion)
+        self.dfs_calls = 0              # counts recursive DFS calls
 
-        # Optional DFS limits (None means "no limit")
+        # Optional DFS limits (None means "no limit") for enumeration mode
         self.max_seconds = None
         self.max_calls = None
         self.max_paths = None
+        self._dfs_t0 = None             # internal timer start for max_seconds
 
-        # Internal timer start for max_seconds
-        self._dfs_t0 = None
+        # Reporting fields (set by whichever algorithm runs)
+        self.num_nodes = 0
+        self.num_edges = 0
+        self.basis_path_count = 0
+        self.cyclomatic_complexity = 0
 
     def add_edge(self, u, v):
         # Ensure node names are stripped of extra whitespace
         u, v = u.strip(), v.strip()
 
         # Detect control characters in node names
-        if any(ord(c) < 32 or ord(c) == 127 for c in u + v):
+        if any(ord(c) < 32 or ord(c) == 127 for c in (u + v)):
             print(f"Error: Invalid node name detected: '{u}' or '{v}' contains control characters.")
             sys.exit(1)
 
@@ -54,12 +58,15 @@ class ControlFlowGraph:
 
         # Add a directed edge from node u to node v
         self.graph[u].append(v)
-        self.edges.add((u, v))  # Store edge for complexity calculation
+        self.edges.add((u, v))
         self.nodes.add(u)
         self.nodes.add(v)
 
+    # ---------------------------------------------------------------------
+    # ENUMERATION MODE (existing behavior; can be exponential)
+    # ---------------------------------------------------------------------
     def find_basis_set(self, start, end):
-        # Perform depth-first search (DFS) to find all paths from start to end
+        """Enumeration-based algorithm: enumerate bounded paths, then select a basis."""
         path = []
         self.paths.clear()
         self.dfs_calls = 0
@@ -74,6 +81,7 @@ class ControlFlowGraph:
             if self.max_paths is not None:
                 lims.append(f"max_paths={self.max_paths}")
             lims_str = (", ".join(lims)) if lims else "no limits"
+            print("[INFO] Using enumeration algorithm")
             print(f"[INFO] Starting DFS path enumeration ({lims_str})...")
 
         self._dfs(start, end, path)
@@ -88,7 +96,7 @@ class ControlFlowGraph:
         if self.verbose:
             print("[INFO] Extracting basis set...")
 
-        basis = self._extract_basis_set()
+        basis = self._extract_basis_set_from_enumerated_paths()
 
         if self.verbose:
             print(f"[INFO] Basis extraction complete: basis_paths={len(basis)}")
@@ -96,66 +104,53 @@ class ControlFlowGraph:
         return basis
 
     def _check_limits(self):
-        """Fast limit checks to prevent unbounded path explosion."""
         if self.max_calls is not None and self.dfs_calls > self.max_calls:
             raise SearchLimitReached(f"DFS call limit exceeded ({self.max_calls}).")
-
         if self.max_paths is not None and len(self.paths) >= self.max_paths:
             raise SearchLimitReached(f"Path limit exceeded ({self.max_paths}).")
-
         if self.max_seconds is not None:
             elapsed = time.perf_counter() - self._dfs_t0
             if elapsed > self.max_seconds:
                 raise SearchLimitReached(f"Time limit exceeded ({self.max_seconds} seconds).")
 
     def _dfs(self, node, end, path):
-        # Count DFS calls to help diagnose explosive growth
         self.dfs_calls += 1
-
-        # Enforce limits (if configured)
         self._check_limits()
 
         if self.verbose and self.dfs_calls % 10000 == 0:
             print(f"[DFS] calls={self.dfs_calls}, paths_found={len(self.paths)}, depth={len(path)}")
 
-        path.append(node)  # Add current node to path
+        path.append(node)
 
         if node == end:
-            self.paths.append(list(path))  # Store a copy of the path
-
-            # Printing every found path is expensive; print a lightweight marker occasionally.
+            self.paths.append(list(path))
             if self.verbose and (len(self.paths) <= 10 or len(self.paths) % 1000 == 0):
                 print(f"[DFS] path found: total_paths={len(self.paths)}, last_path_len={len(path)}")
         else:
             for neighbor in self.graph[node]:
-                if path.count(neighbor) < 2:  # Allow revisiting nodes, but limit cycles
+                # Allow revisiting nodes, but limit cycles
+                if path.count(neighbor) < 2:
                     self._dfs(neighbor, end, path)
 
-        path.pop()  # Remove the last node before backtracking
+        path.pop()
 
-    def _extract_basis_set(self):
-        # Compute cyclomatic complexity with correct node counting
+    def _extract_basis_set_from_enumerated_paths(self):
+        # Cyclomatic complexity computed on the full graph that was parsed
         num_nodes = len(self.nodes)
         num_edges = len(self.edges)
         expected_basis_size = num_edges - num_nodes + 2
 
-        # Ensure we collect the correct number of independent paths
         basis_set = []
         covered_edges = set()
 
         for path in self.paths:
             path_edges = {(path[i], path[i + 1]) for i in range(len(path) - 1)}
-
-            # Always add paths that introduce new edges
             if not path_edges.issubset(covered_edges):
                 basis_set.append(path)
                 covered_edges.update(path_edges)
-
-            # Ensure we collect enough paths to match cyclomatic complexity
             if len(basis_set) >= expected_basis_size:
                 break
 
-        # If not enough paths have been found, keep adding remaining unique paths
         if len(basis_set) < expected_basis_size:
             remaining_paths = [p for p in self.paths if p not in basis_set]
             for path in remaining_paths:
@@ -169,9 +164,167 @@ class ControlFlowGraph:
         self.cyclomatic_complexity = expected_basis_size
         return basis_set
 
+    # ---------------------------------------------------------------------
+    # LINEAR MODE (O(E+V)): spanning-tree + chord construction
+    # ---------------------------------------------------------------------
+    def _reachable_from(self, start):
+        seen = set()
+        stack = [start]
+        while stack:
+            u = stack.pop()
+            if u in seen:
+                continue
+            seen.add(u)
+            for v in self.graph[u]:
+                if v not in seen:
+                    stack.append(v)
+        return seen
+
+    def _reverse_adjacency(self):
+        rev = defaultdict(list)
+        for (u, v) in self.edges:
+            rev[v].append(u)
+        return rev
+
+    def _reachable_to_end(self, end, rev):
+        seen = set()
+        stack = [end]
+        while stack:
+            u = stack.pop()
+            if u in seen:
+                continue
+            seen.add(u)
+            for p in rev[u]:
+                if p not in seen:
+                    stack.append(p)
+        return seen
+
+    def _build_forward_tree_parents(self, start, allowed):
+        """BFS tree from start on allowed subgraph; parent[v]=u."""
+        parent = {start: None}
+        q = deque([start])
+        while q:
+            u = q.popleft()
+            for v in self.graph[u]:
+                if v in allowed and v not in parent:
+                    parent[v] = u
+                    q.append(v)
+        return parent
+
+    def _build_reverse_tree_next_hop(self, end, allowed, rev):
+        """BFS from end on reversed edges; next_hop[x] is next node on x->...->end."""
+        next_hop = {end: None}
+        q = deque([end])
+        while q:
+            u = q.popleft()
+            for p in rev[u]:  # p -> u in original
+                if p in allowed and p not in next_hop:
+                    next_hop[p] = u
+                    q.append(p)
+        return next_hop
+
+    def _path_start_to(self, parent, u):
+        if u not in parent:
+            return None
+        out = []
+        cur = u
+        while cur is not None:
+            out.append(cur)
+            cur = parent[cur]
+        out.reverse()
+        return out
+
+    def _path_to_end(self, next_hop, u):
+        if u not in next_hop:
+            return None
+        out = [u]
+        cur = u
+        while next_hop[cur] is not None:
+            cur = next_hop[cur]
+            out.append(cur)
+        return out
+
+    def find_basis_set_linear(self, start, end):
+        """Linear-time basis path construction (no path enumeration)."""
+        if self.verbose:
+            print("[INFO] Using linear (spanning-tree) algorithm")
+
+        # Restrict to nodes that lie on at least one start->end route:
+        # allowed = reachable_from_start ∩ can_reach_end
+        reach = self._reachable_from(start)
+        rev = self._reverse_adjacency()
+        coreach = self._reachable_to_end(end, rev)
+        allowed = reach & coreach
+
+        if start not in allowed or end not in allowed:
+            print("Error: No paths found from start to end.")
+            sys.exit(1)
+
+        # Build trees
+        parent = self._build_forward_tree_parents(start, allowed)
+        next_hop = self._build_reverse_tree_next_hop(end, allowed, rev)
+
+        base = self._path_start_to(parent, end)
+        if base is None:
+            print("Error: No paths found from start to end.")
+            sys.exit(1)
+
+        # Tree edges in forward tree
+        tree_edges = set()
+        for node, p in parent.items():
+            if p is not None:
+                tree_edges.add((p, node))
+
+        # Allowed edges (unique)
+        allowed_edges = {(u, v) for (u, v) in self.edges if u in allowed and v in allowed}
+
+        Vp = len(allowed)
+        Ep = len(allowed_edges)
+        expected = Ep - Vp + 2  # cyclomatic complexity on the relevant subgraph
+
+        if self.verbose:
+            print(f"[INFO] Relevant subgraph: nodes={Vp}, edges={Ep}, expected_basis={expected}")
+
+        # Construct basis paths: base path + one per chord (non-tree edge)
+        basis = [base]
+        seen_paths = {tuple(base)}
+
+        # Iterate chords in stable order for reproducibility
+        for (u, v) in sorted(allowed_edges):
+            if (u, v) in tree_edges:
+                continue  # tree edge -> not a chord
+
+            p1 = self._path_start_to(parent, u)   # START -> u
+            p2 = self._path_to_end(next_hop, v)   # v -> END
+
+            if p1 is None or p2 is None:
+                continue
+
+            candidate = p1 + [v] + p2[1:]  # ...u, then chord to v, then v..END (skip duplicate v)
+            t = tuple(candidate)
+            if t not in seen_paths:
+                seen_paths.add(t)
+                basis.append(candidate)
+
+            if len(basis) >= expected:
+                break
+
+        # Store reporting values (for the relevant subgraph)
+        self.num_nodes = Vp
+        self.num_edges = Ep
+        self.cyclomatic_complexity = expected
+        self.basis_path_count = len(basis)
+
+        if len(basis) != expected and self.verbose:
+            print(f"[WARN] Constructed basis size {len(basis)} != expected {expected}.")
+
+        return basis
+
+    # ---------------------------------------------------------------------
+    # FILE PARSING (unchanged validation)
+    # ---------------------------------------------------------------------
     @staticmethod
     def from_file(filename, verbose: bool = False):
-        # Check if file exists
         try:
             with open(filename, 'r') as file:
                 lines = file.read().splitlines()
@@ -179,21 +332,19 @@ class ControlFlowGraph:
             print(f"Error: File '{filename}' not found.")
             sys.exit(1)
 
-        # Check if file is empty or contains only whitespace before processing
         if not lines or all(line.strip() == "" for line in lines):
             print("Error: Input file is empty or contains only whitespace.")
             sys.exit(1)
 
-        # Trim trailing blank or empty lines
+        # Trim trailing blank lines
         while lines and lines[-1].strip() == "":
             lines.pop()
 
-        # Check if the file has at least one edge defined before processing
         if len(lines[1:-1]) == 0:
             print("Error: No edges defined in the input file.")
             sys.exit(1)
 
-        # Check for edges with too few or too many nodes before processing
+        # Edge token count checks
         for line in lines[1:-1]:
             parts = line.split()
             if len(parts) < 2:
@@ -203,29 +354,28 @@ class ControlFlowGraph:
                 print(f"Error: Edge definition '{line}' has too many nodes. Expected format: 'NODE1 NODE2'")
                 sys.exit(1)
 
-        # Check for duplicate edges before processing
+        # Duplicate edge check
         seen_edges = set()
         for line in lines[1:-1]:
-            parts = line.split()
-            u, v = map(str.strip, parts)
+            u, v = map(str.strip, line.split())
             if (u, v) in seen_edges:
                 print(f"Error: Duplicate edge detected: '{u} -> {v}'")
                 sys.exit(1)
             seen_edges.add((u, v))
 
-        # Validate file format
         if len(lines) < 3:
             print("Error: Invalid input file format. Expected at least a start node, edges, and an end node.")
             sys.exit(1)
 
-        start = lines[0].strip()   # First line is the start node
-        end = lines[-1].strip()    # Last line is the end node
+        start = lines[0].strip()
+        end = lines[-1].strip()
         cfg = ControlFlowGraph(verbose=verbose)
 
-        # Check that no edges start at END and no edges end at START
+        # START/END loop guards:
+        # - no edges start at END
+        # - no edges end at START
         for line in lines[1:-1]:
-            parts = line.split()
-            u, v = map(str.strip, parts)
+            u, v = map(str.strip, line.split())
             if u == end:
                 print("Error: end node should not start an edge")
                 sys.exit(1)
@@ -234,11 +384,9 @@ class ControlFlowGraph:
                 sys.exit(1)
 
         for line in lines[1:-1]:
-            parts = line.split()
-            u, v = map(str.strip, parts)
+            u, v = map(str.strip, line.split())
             cfg.add_edge(u, v)
 
-        # Check if start and end nodes are in the edges
         if start not in cfg.nodes:
             print(f"Error: STARTING NODE '{start}' is missing.")
             sys.exit(1)
@@ -257,12 +405,16 @@ def parse_args():
     parser.add_argument("filename", help="Input CFG text file")
     parser.add_argument("-t", "--time", action="store_true", help="Print elapsed execution time")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose tracing while running")
+    parser.add_argument("--linear", action="store_true",
+                        help="Use O(E+V) spanning-tree algorithm instead of path enumeration")
+
+    # Enumeration-mode guard rails (still accepted even if --linear is used; they just won't apply)
     parser.add_argument("--max-seconds", type=float, default=None,
-                        help="Stop DFS after this many seconds (prevents path explosion)")
+                        help="Stop DFS after this many seconds (enumeration mode only)")
     parser.add_argument("--max-calls", type=int, default=None,
-                        help="Stop DFS after this many recursive calls (prevents path explosion)")
+                        help="Stop DFS after this many recursive calls (enumeration mode only)")
     parser.add_argument("--max-paths", type=int, default=None,
-                        help="Stop DFS after finding this many paths (prevents path explosion)")
+                        help="Stop DFS after finding this many paths (enumeration mode only)")
     return parser.parse_args()
 
 
@@ -275,12 +427,15 @@ if __name__ == "__main__":
     try:
         cfg, start, end = ControlFlowGraph.from_file(args.filename, verbose=args.verbose)
 
-        # Apply optional DFS limits
+        # Apply optional DFS limits (enumeration mode)
         cfg.max_seconds = args.max_seconds
         cfg.max_calls = args.max_calls
         cfg.max_paths = args.max_paths
 
-        basis_set = cfg.find_basis_set(start, end)
+        if args.linear:
+            basis_set = cfg.find_basis_set_linear(start, end)
+        else:
+            basis_set = cfg.find_basis_set(start, end)
 
         print("Basis Set of Paths:")
         for path in basis_set:
@@ -292,7 +447,6 @@ if __name__ == "__main__":
         print(f"Number of Basis Paths Found: {cfg.basis_path_count}")
 
     except SearchLimitReached as e:
-        # Graceful termination when a user-provided limit is hit
         print(f"Stopped early due to search limits: {e}")
         calls = getattr(cfg, "dfs_calls", 0) if cfg is not None else 0
         paths_found = len(getattr(cfg, "paths", [])) if cfg is not None else 0
