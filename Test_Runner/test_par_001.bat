@@ -42,3 +42,11 @@ python %1 %2 Start_In_Loop.txt
 python %1 %2 End_In_Loop.txt
 python %1 %2 Start_and_End_In_Loop.txt
 python %1 %2 Funky.txt
+python %1 %2 T005.txt
+python %1 %2 T010.txt
+python %1 %2 T015.txt
+python %1 %2 T016.txt
+python %1 %2 T017.txt
+python %1 %2 T018.txt
+python %1 %2 T020.txt
+python %1 %2 T050.txt
