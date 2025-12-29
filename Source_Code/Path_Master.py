@@ -1,6 +1,7 @@
-# Version 54
+# Version 55
 #
 # Improves --validate behavior when enumeration hits search limits.
+# Adds --confirm-basis (strong rank-based validation of basis-ness).
 #   - Always prints the LINEAR summary.
 #   - If enumeration completes: prints both summaries and PASS/FAIL.
 #   - If enumeration is stopped by --max-* limits: prints enumeration status + INCONCLUSIVE.
@@ -48,6 +49,13 @@ VALIDATION
             - each basis path is a valid START→END path using existing edges
 
         If enumeration is stopped by --max-* limits, validation is INCONCLUSIVE.
+
+CONFIRM-BASIS
+    --confirm-basis
+        Perform strong validation that the produced path set is a true basis.
+        This converts basis paths into edge-incidence vectors (mod 2) and checks
+        that their GF(2) rank equals cyclomatic complexity on the relevant subgraph.
+        This does not enumerate all paths and is fast in practice.
 
 ENUMERATION LIMITS (enumeration algorithm only)
     --max-seconds SECONDS
@@ -475,6 +483,8 @@ def parse_args():
                         help="Use O(E+V) spanning-tree algorithm instead of path enumeration")
     parser.add_argument("--validate", action="store_true",
                         help="Run both algorithms and validate key invariants (may be slow without --max-*)")
+    parser.add_argument("--confirm-basis", action="store_true",
+                        help="Strongly confirm the produced path set is a true basis (GF(2) rank check)")
 
     parser.add_argument("--max-seconds", type=float, default=None,
                         help="Stop DFS after this many seconds (enumeration mode only)")
@@ -483,6 +493,92 @@ def parse_args():
     parser.add_argument("--max-paths", type=int, default=None,
                         help="Stop DFS after finding this many paths (enumeration mode only)")
     return parser.parse_args()
+
+
+
+def gf2_rank_bitmasks(rows):
+    """Compute rank over GF(2) for a list of int bitmasks (Gaussian elimination)."""
+    pivots = {}  # pivot_bit_index -> row mask
+    rank = 0
+    for r in rows:
+        x = r
+        while x:
+            p = x.bit_length() - 1  # index of highest-set bit
+            if p in pivots:
+                x ^= pivots[p]
+            else:
+                pivots[p] = x
+                rank += 1
+                break
+    return rank
+
+
+def build_edge_index(allowed_edges):
+    """Return (edge_list, edge_to_index) with a stable order."""
+    edge_list = sorted(allowed_edges)
+    edge_to_index = {e: i for i, e in enumerate(edge_list)}
+    return edge_list, edge_to_index
+
+
+def path_to_incidence_mask(path, edge_to_index):
+    """Convert a path to an edge-incidence bitmask (mod 2)."""
+    mask = 0
+    for i in range(len(path) - 1):
+        e = (path[i], path[i + 1])
+        idx = edge_to_index.get(e)
+        if idx is None:
+            return None  # invalid edge for this relevant-subgraph index
+        mask ^= (1 << idx)  # XOR implements mod-2 parity
+    return mask
+
+
+def confirm_basis(cfg, start, end, basis_paths, label):
+    """Strongly confirm that basis_paths form a true basis using GF(2) rank."""
+    allowed_nodes, allowed_edges = cfg.relevant_subgraph(start, end)
+    Vp = len(allowed_nodes)
+    Ep = len(allowed_edges)
+    expected = Ep - Vp + 2
+
+    edge_list, edge_to_index = build_edge_index(allowed_edges)
+
+    # Basic checks: valid paths and build incidence rows
+    rows = []
+    ok = True
+    for k, p in enumerate(basis_paths, 1):
+        if not p or p[0] != start or p[-1] != end:
+            print(f"[FAIL] {label}: basis path {k} does not start at START and end at END.")
+            ok = False
+            continue
+        m = path_to_incidence_mask(p, edge_to_index)
+        if m is None:
+            print(f"[FAIL] {label}: basis path {k} contains an edge not in the relevant START→END subgraph.")
+            ok = False
+            continue
+        rows.append(m)
+
+    rank = gf2_rank_bitmasks(rows)
+    size_ok = (len(basis_paths) == expected)
+    rank_ok = (rank == expected)
+
+    print(f"=== CONFIRM-BASIS ({label}) ===")
+    print(f"Relevant subgraph nodes: {Vp}")
+    print(f"Relevant subgraph edges: {Ep}")
+    print(f"Cyclomatic Complexity (Expected Basis Paths): {expected}")
+    print(f"Basis Paths Provided: {len(basis_paths)}")
+    print(f"GF(2) Rank of Incidence Vectors: {rank}")
+
+    if not size_ok:
+        print(f"Result: FAIL (basis size {len(basis_paths)} != expected {expected})")
+        return False, expected, rank
+    if not ok:
+        print("Result: FAIL (one or more basis paths are invalid)")
+        return False, expected, rank
+    if not rank_ok:
+        print("Result: FAIL (paths are linearly dependent; not a true basis)")
+        return False, expected, rank
+
+    print("Result: PASS (valid basis set; independent and correct size)")
+    return True, expected, rank
 
 
 def _print_summary(label, nodes, edges, cyclo, basis_len):
@@ -532,6 +628,13 @@ if __name__ == "__main__":
             # Always show linear summary
             _print_summary("LINEAR ALGORITHM (relevant subgraph)", Vp, Ep, expected, len(basis_linear))
 
+            if args.confirm_basis:
+                ok_basis_linear, _, _ = confirm_basis(cfg, start, end, basis_linear, "LINEAR")
+                if not ok_basis_linear:
+                    # If the linear basis fails strong confirmation, validation is a definite FAIL.
+                    print("Validation result: FAIL (linear basis failed --confirm-basis)")
+                    sys.exit(1)
+
             # 2) Enumeration algorithm (may be slow). Catch limits and report INCONCLUSIVE.
             enum_completed = False
             enum_error = None
@@ -568,6 +671,11 @@ if __name__ == "__main__":
 
             _print_summary("ENUMERATION ALGORITHM (relevant expected)", Vp, Ep, expected, len(basis_enum))
 
+            if args.confirm_basis:
+                ok_basis_enum, _, _ = confirm_basis(cfg, start, end, basis_enum, "ENUMERATION")
+                if not ok_basis_enum:
+                    ok = False
+
             if ok:
                 print("Validation result: PASS")
                 sys.exit(0)
@@ -589,6 +697,11 @@ if __name__ == "__main__":
         print(f"Number of Edges: {cfg.num_edges}")
         print(f"Cyclomatic Complexity (Expected Basis Paths): {cfg.cyclomatic_complexity}")
         print(f"Number of Basis Paths Found: {cfg.basis_path_count}")
+
+        if args.confirm_basis:
+            ok_basis, _, _ = confirm_basis(cfg, start, end, basis_set, "RUN")
+            if not ok_basis:
+                sys.exit(1)
 
     except SearchLimitReached as e:
         # Non-validate runs still use the global handler
