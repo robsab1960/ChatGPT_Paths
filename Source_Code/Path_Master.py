@@ -1,10 +1,22 @@
-# Version 49
+# Version 50
+#
+# Adds safe guard-rails for path explosion:
+#   --max-seconds  Stop DFS after N seconds
+#   --max-calls    Stop DFS after N recursive calls
+#   --max-paths    Stop DFS after N paths found
+# All limits are optional. When a limit is hit, the program exits gracefully with a clear message.
 
 import sys
 import re
 import time
 import argparse
 from collections import defaultdict
+
+
+class SearchLimitReached(Exception):
+    """Raised when DFS exceeds user-provided limits (time/calls/paths)."""
+    pass
+
 
 class ControlFlowGraph:
     def __init__(self, verbose: bool = False):
@@ -17,6 +29,14 @@ class ControlFlowGraph:
         # Verbose tracing controls
         self.verbose = verbose
         self.dfs_calls = 0  # counts recursive DFS calls (useful for diagnosing path explosion)
+
+        # Optional DFS limits (None means "no limit")
+        self.max_seconds = None
+        self.max_calls = None
+        self.max_paths = None
+
+        # Internal timer start for max_seconds
+        self._dfs_t0 = None
 
     def add_edge(self, u, v):
         # Ensure node names are stripped of extra whitespace
@@ -43,9 +63,18 @@ class ControlFlowGraph:
         path = []
         self.paths.clear()
         self.dfs_calls = 0
+        self._dfs_t0 = time.perf_counter()
 
         if self.verbose:
-            print("[INFO] Starting DFS path enumeration...")
+            lims = []
+            if self.max_seconds is not None:
+                lims.append(f"max_seconds={self.max_seconds}")
+            if self.max_calls is not None:
+                lims.append(f"max_calls={self.max_calls}")
+            if self.max_paths is not None:
+                lims.append(f"max_paths={self.max_paths}")
+            lims_str = (", ".join(lims)) if lims else "no limits"
+            print(f"[INFO] Starting DFS path enumeration ({lims_str})...")
 
         self._dfs(start, end, path)
 
@@ -66,9 +95,26 @@ class ControlFlowGraph:
 
         return basis
 
+    def _check_limits(self):
+        """Fast limit checks to prevent unbounded path explosion."""
+        if self.max_calls is not None and self.dfs_calls > self.max_calls:
+            raise SearchLimitReached(f"DFS call limit exceeded ({self.max_calls}).")
+
+        if self.max_paths is not None and len(self.paths) >= self.max_paths:
+            raise SearchLimitReached(f"Path limit exceeded ({self.max_paths}).")
+
+        if self.max_seconds is not None:
+            elapsed = time.perf_counter() - self._dfs_t0
+            if elapsed > self.max_seconds:
+                raise SearchLimitReached(f"Time limit exceeded ({self.max_seconds} seconds).")
+
     def _dfs(self, node, end, path):
         # Count DFS calls to help diagnose explosive growth
         self.dfs_calls += 1
+
+        # Enforce limits (if configured)
+        self._check_limits()
+
         if self.verbose and self.dfs_calls % 10000 == 0:
             print(f"[DFS] calls={self.dfs_calls}, paths_found={len(self.paths)}, depth={len(path)}")
 
@@ -211,26 +257,49 @@ def parse_args():
     parser.add_argument("filename", help="Input CFG text file")
     parser.add_argument("-t", "--time", action="store_true", help="Print elapsed execution time")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose tracing while running")
+    parser.add_argument("--max-seconds", type=float, default=None,
+                        help="Stop DFS after this many seconds (prevents path explosion)")
+    parser.add_argument("--max-calls", type=int, default=None,
+                        help="Stop DFS after this many recursive calls (prevents path explosion)")
+    parser.add_argument("--max-paths", type=int, default=None,
+                        help="Stop DFS after finding this many paths (prevents path explosion)")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-
     t0 = time.perf_counter() if args.time else None
 
-    cfg, start, end = ControlFlowGraph.from_file(args.filename, verbose=args.verbose)
-    basis_set = cfg.find_basis_set(start, end)
+    cfg = None  # so we can report partial progress on limit-hit
 
-    print("Basis Set of Paths:")
-    for path in basis_set:
-        print(" -> ".join(path))
+    try:
+        cfg, start, end = ControlFlowGraph.from_file(args.filename, verbose=args.verbose)
 
-    print(f"Number of Nodes: {cfg.num_nodes}")
-    print(f"Number of Edges: {cfg.num_edges}")
-    print(f"Cyclomatic Complexity (Expected Basis Paths): {cfg.cyclomatic_complexity}")
-    print(f"Number of Basis Paths Found: {cfg.basis_path_count}")
+        # Apply optional DFS limits
+        cfg.max_seconds = args.max_seconds
+        cfg.max_calls = args.max_calls
+        cfg.max_paths = args.max_paths
 
-    if args.time:
-        elapsed = time.perf_counter() - t0
-        print(f"Elapsed Time (seconds): {elapsed:.6f}")
+        basis_set = cfg.find_basis_set(start, end)
+
+        print("Basis Set of Paths:")
+        for path in basis_set:
+            print(" -> ".join(path))
+
+        print(f"Number of Nodes: {cfg.num_nodes}")
+        print(f"Number of Edges: {cfg.num_edges}")
+        print(f"Cyclomatic Complexity (Expected Basis Paths): {cfg.cyclomatic_complexity}")
+        print(f"Number of Basis Paths Found: {cfg.basis_path_count}")
+
+    except SearchLimitReached as e:
+        # Graceful termination when a user-provided limit is hit
+        print(f"Stopped early due to search limits: {e}")
+        calls = getattr(cfg, "dfs_calls", 0) if cfg is not None else 0
+        paths_found = len(getattr(cfg, "paths", [])) if cfg is not None else 0
+        print(f"Progress so far: calls={calls}, paths_found={paths_found}")
+        sys.exit(1)
+
+    finally:
+        if args.time and t0 is not None:
+            elapsed = time.perf_counter() - t0
+            print(f"Elapsed Time (seconds): {elapsed:.6f}")
