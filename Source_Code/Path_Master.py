@@ -1,4 +1,4 @@
-# Version 53
+# Version 54
 #
 # Improves --validate behavior when enumeration hits search limits.
 #   - Always prints the LINEAR summary.
@@ -14,6 +14,67 @@ import re
 import time
 import argparse
 from collections import defaultdict, deque
+
+HELP_EPILOG = """
+PATH_MASTER(1)              User Commands              PATH_MASTER(1)
+
+NAME
+    Path_Master — compute a basis set of paths for a control flow graph
+
+SYNOPSIS
+    path_master.py [OPTIONS] FILE
+
+DESCRIPTION
+    Path_Master analyzes a control flow graph (CFG) and computes a basis set of
+    execution paths suitable for McCabe basis path testing.
+
+    Input format:
+        - First line: START node
+        - Last line:  END node
+        - Intermediate lines: directed edges "NODE1 NODE2"
+
+ALGORITHMS
+    Default (no flag):
+        Enumeration-based DFS (can be exponential; use --max-* limits)
+
+    --linear:
+        O(E + V) spanning-tree based algorithm (no path enumeration)
+
+VALIDATION
+    --validate
+        Runs both algorithms and checks invariants:
+            - cyclomatic complexity on the START→END relevant subgraph
+            - number of basis paths equals cyclomatic complexity
+            - each basis path is a valid START→END path using existing edges
+
+        If enumeration is stopped by --max-* limits, validation is INCONCLUSIVE.
+
+ENUMERATION LIMITS (enumeration algorithm only)
+    --max-seconds SECONDS
+        Stop DFS after the given number of seconds.
+
+    --max-calls COUNT
+        Stop DFS after the given number of recursive calls.
+
+    --max-paths COUNT
+        Stop DFS after finding the given number of paths.
+
+DIAGNOSTICS
+    -v, --verbose
+        Enable verbose tracing
+
+    -t, --time
+        Print elapsed execution time
+
+EXIT STATUS
+    0   Success / Validation PASS
+    1   Error / Validation FAIL
+    2   Validation INCONCLUSIVE (enumeration incomplete)
+
+SEE ALSO
+    McCabe (1976), NISTIR 5737, Cal Poly Basis Path Testing Tutorial
+"""
+
 
 
 class SearchLimitReached(Exception):
@@ -402,7 +463,11 @@ class ControlFlowGraph:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Compute a basis set of paths from a CFG file.")
+    parser = argparse.ArgumentParser(
+        description="Compute a basis set of paths from a control flow graph.",
+        epilog=HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("filename", help="Input CFG text file")
     parser.add_argument("-t", "--time", action="store_true", help="Print elapsed execution time")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose tracing while running")
