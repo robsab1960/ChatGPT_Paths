@@ -1,44 +1,44 @@
-python %1 Disconnected_from_END.txt
-python %1 Disconnected_from_START.txt
-python %1 ECC_001_EBP_001.txt
-python %1 ECC_002_EBP_006.txt
-python %1 ECC_003_EBP_006.txt
-python %1 ECC_004_EBP_007.txt
-python %1 ECC_005_EBP_004.txt
-python %1 ECC_006_EBP_005.txt
-python %1 ECC_007_EBP_006.txt
-python %1 ECC_008_EBP_001.txt
-python %1 ECC_009_EBP_001.txt
-python %1 ECC_010_EBP_007.txt
-python %1 Example_Input.txt
-python %1 EX_CF_001_In.txt
-python %1 EX_CF_002_In.txt
-python %1 EX_CF_004_In.txt
-python %1 inputBMO.txt
-python %1 SLG_001_EBP_001.txt
-python %1 SLG_002_EBP_002.txt
-python %1 SLG_003_EBP_003.txt
-python %1 SLG_004_EBP_004.txt
-python %1 SLG_005_EBP_005.txt
-python %1 SLG_006_EBP_006.txt
-python %1 SLG_007_EBP_007.txt
-python %1 SLG_008_EBP_008.txt
-python %1 SLG_009_EBP_009.txt
-python %1 SLG_010_EBP_010.txt
-python %1 missing_file.txt
-python %1 missing_start.txt
-python %1 missing_end.txt
-python %1 missing_start_and_end.txt
-python %1 missing_edges.txt
-python %1 invalid_node_char.txt
-python %1 LibertyInput.txt
-python %1 Invalid_Edge_Formatting_too_few_nodes.txt
-python %1 Invalid_Edge_Formatting_too_many_nodes.txt
-python %1 File_Is_Empty.txt
-python %1 File_Contains_Only_Whitespace.txt
-python %1 Duplicate_Edges.txt
-python %1 Trailing_Whitespace.txt
-python %1 Start_In_Loop.txt
-python %1 End_In_Loop.txt
-python %1 Start_and_End_In_Loop.txt
-python %1 Funky.txt
+python %1 %2 Disconnected_from_END.txt
+python %1 %2 Disconnected_from_START.txt
+python %1 %2 ECC_001_EBP_001.txt
+python %1 %2 ECC_002_EBP_006.txt
+python %1 %2 ECC_003_EBP_006.txt
+python %1 %2 ECC_004_EBP_007.txt
+python %1 %2 ECC_005_EBP_004.txt
+python %1 %2 ECC_006_EBP_005.txt
+python %1 %2 ECC_007_EBP_006.txt
+python %1 %2 ECC_008_EBP_001.txt
+python %1 %2 ECC_009_EBP_001.txt
+python %1 %2 ECC_010_EBP_007.txt
+python %1 %2 Example_Input.txt
+python %1 %2 EX_CF_001_In.txt
+python %1 %2 EX_CF_002_In.txt
+python %1 %2 EX_CF_004_In.txt
+python %1 %2 inputBMO.txt
+python %1 %2 SLG_001_EBP_001.txt
+python %1 %2 SLG_002_EBP_002.txt
+python %1 %2 SLG_003_EBP_003.txt
+python %1 %2 SLG_004_EBP_004.txt
+python %1 %2 SLG_005_EBP_005.txt
+python %1 %2 SLG_006_EBP_006.txt
+python %1 %2 SLG_007_EBP_007.txt
+python %1 %2 SLG_008_EBP_008.txt
+python %1 %2 SLG_009_EBP_009.txt
+python %1 %2 SLG_010_EBP_010.txt
+python %1 %2 missing_file.txt
+python %1 %2 missing_start.txt
+python %1 %2 missing_end.txt
+python %1 %2 missing_start_and_end.txt
+python %1 %2 missing_edges.txt
+python %1 %2 invalid_node_char.txt
+python %1 %2 LibertyInput.txt
+python %1 %2 Invalid_Edge_Formatting_too_few_nodes.txt
+python %1 %2 Invalid_Edge_Formatting_too_many_nodes.txt
+python %1 %2 File_Is_Empty.txt
+python %1 %2 File_Contains_Only_Whitespace.txt
+python %1 %2 Duplicate_Edges.txt
+python %1 %2 Trailing_Whitespace.txt
+python %1 %2 Start_In_Loop.txt
+python %1 %2 End_In_Loop.txt
+python %1 %2 Start_and_End_In_Loop.txt
+python %1 %2 Funky.txt
