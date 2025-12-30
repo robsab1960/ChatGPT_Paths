@@ -1,4 +1,4 @@
-# Version 63
+# Version 65
 #
 # Improves --validate behavior when enumeration hits search limits.
 # Adds --confirm-basis (strong rank-based validation of basis-ness).
@@ -253,11 +253,18 @@ DIAGNOSTICS
         Print elapsed execution time
 
 EXIT STATUS
-    0   Success / Validation PASS
-    1   Error / Validation FAIL
-    2   Validation INCONCLUSIVE (enumeration incomplete)
+    0   Success. Basis paths computed successfully or validation passed.
+
+    1   Failure. A validation check failed, an invariant was violated,
+        or --confirm-basis reported a non-basis path set.
+
+    2   Inconclusive. Enumeration stopped early due to a search limit
+        (--max-seconds, --max-calls, or --max-paths).
+
+    130 Interrupted by user (Ctrl+C / SIGINT).
 
 SEE ALSO
+
     McCabe (1976), NISTIR 5737, Cal Poly Basis Path Testing Tutorial
 """
 
