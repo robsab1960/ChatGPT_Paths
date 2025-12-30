@@ -1,4 +1,4 @@
-# Version 55
+# Version 63
 #
 # Improves --validate behavior when enumeration hits search limits.
 # Adds --confirm-basis (strong rank-based validation of basis-ness).
@@ -15,6 +15,179 @@ import re
 import time
 import argparse
 from collections import defaultdict, deque
+
+import os
+import socket
+import platform
+import hashlib
+import datetime
+import json
+
+
+def _sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _utc_timestamp():
+    # ISO 8601 UTC with microseconds
+    return datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _run_id():
+    # timestamp::pid
+    return f"{_utc_timestamp()}::pid{os.getpid()}"
+
+
+def _relpath(p):
+    try:
+        return os.path.relpath(p).replace("\\", "/")
+    except Exception:
+        return str(p).replace("\\", "/")
+
+
+def _analysis_dict(cfg, start, end, basis_paths, algorithm, confirm_enabled):
+    allowed_nodes, allowed_edges = cfg.relevant_subgraph(start, end)
+    nodes_list = sorted(allowed_nodes)
+    edges_list = [[u, v] for (u, v) in sorted(allowed_edges)]
+    Vp = len(nodes_list)
+    Ep = len(edges_list)
+    cyclo = Ep - Vp + 2
+
+    analysis = {
+        "algorithm": algorithm,
+        "relevant_subgraph": {
+            "nodes": nodes_list,
+            "edges": edges_list,
+            "node_count": Vp,
+            "edge_count": Ep,
+            "cyclomatic_complexity": cyclo
+        },
+        "basis": {
+            "basis_count": len(basis_paths) if basis_paths is not None else 0,
+            "paths": basis_paths if basis_paths is not None else []
+        },
+        "confirm_basis": {
+            "enabled": bool(confirm_enabled),
+            "rank_gf2": None,
+            "pass": None,
+            "failure_reason": None
+        },
+        "performance": {
+            "elapsed_seconds": None
+        }
+    }
+
+    if confirm_enabled and basis_paths is not None:
+        # Compute rank without printing
+        _, edge_to_index = build_edge_index({(u, v) for (u, v) in allowed_edges})
+        rows = []
+        ok_paths = True
+        for p in basis_paths:
+            m = path_to_incidence_mask(p, edge_to_index)
+            if m is None:
+                ok_paths = False
+                break
+            rows.append(m)
+        rank = gf2_rank_bitmasks(rows) if ok_paths else 0
+        analysis["confirm_basis"]["rank_gf2"] = rank
+        analysis["confirm_basis"]["pass"] = (rank == cyclo and len(basis_paths) == cyclo and ok_paths)
+        if not ok_paths:
+            analysis["confirm_basis"]["failure_reason"] = "path contains edge not in relevant subgraph"
+        elif len(basis_paths) != cyclo:
+            analysis["confirm_basis"]["failure_reason"] = "basis size does not match cyclomatic complexity"
+        elif rank != cyclo:
+            analysis["confirm_basis"]["failure_reason"] = "paths are linearly dependent (rank != cyclomatic complexity)"
+        else:
+            analysis["confirm_basis"]["failure_reason"] = None
+
+    return analysis
+
+
+def make_json_payload(args, cfg, start, end, mode, analysis_obj, exit_code, status, message, elapsed_seconds):
+    filename_abs = args.filename
+    payload = {
+        "schema_version": "1.1",
+        "tool": {
+            "name": "Path_Master",
+            "version": _extract_version_number(),
+            "source_file": _relpath(__file__),
+            "git": {
+                "commit": None,
+                "dirty": None
+            }
+        },
+        "run": {
+            "run_id": _run_id(),
+            "timestamp_utc": _utc_timestamp(),
+            "host": socket.gethostname(),
+            "platform": platform.platform()
+        },
+        "input": {
+            "file_path": _relpath(filename_abs),
+            "file_name": os.path.basename(filename_abs),
+            "sha256": _sha256_file(filename_abs),
+            "start_node": start,
+            "end_node": end
+        },
+        "options": {
+            "argv": sys.argv[1:],
+            "mode": mode,
+            "algorithm": ("both" if args.validate else ("linear" if args.linear else "enumeration")),
+            "verbose": bool(args.verbose),
+            "time_enabled": bool(args.time),
+            "confirm_basis": bool(args.confirm_basis),
+            "json_enabled": True
+        },
+        "limits": {
+            "max_seconds": args.max_seconds,
+            "max_calls": args.max_calls,
+            "max_paths": args.max_paths
+        },
+        "results": {
+            "summary": {
+                "exit_code": exit_code,
+                "status": status,
+                "message": message
+            },
+            "analysis": analysis_obj
+        },
+        "diagnostics": {
+            "stderr": None,
+            "warnings": [],
+            "enumeration_stats": {
+                "dfs_calls": getattr(cfg, "dfs_calls", None),
+                "paths_found": len(getattr(cfg, "paths", []) or []),
+                "max_depth": getattr(cfg, "max_depth_seen", None)
+            }
+        }
+    }
+
+    # Set elapsed time in analysis objects
+    if mode == "validate":
+        if "linear" in payload["results"]["analysis"]:
+            payload["results"]["analysis"]["linear"]["performance"]["elapsed_seconds"] = elapsed_seconds
+        if "enumeration" in payload["results"]["analysis"]:
+            payload["results"]["analysis"]["enumeration"]["performance"]["elapsed_seconds"] = elapsed_seconds
+    else:
+        payload["results"]["analysis"]["performance"]["elapsed_seconds"] = elapsed_seconds
+
+    return payload
+
+
+def _extract_version_number():
+    # Reads the leading "# Version NN" line at top of file.
+    try:
+        with open(__file__, "r", encoding="utf-8") as f:
+            first = f.readline().strip()
+        m = re.search(r"Version\s+(\d+)", first)
+        return int(m.group(1)) if m else None
+    except Exception:
+        return None
+
 
 HELP_EPILOG = """
 PATH_MASTER(1)              User Commands              PATH_MASTER(1)
@@ -40,6 +213,11 @@ ALGORITHMS
 
     --linear:
         O(E + V) spanning-tree based algorithm (no path enumeration)
+
+JSON OUTPUT
+    --json
+        Emit a single JSON object to stdout (schema_version 1.1). When enabled,
+        human-readable output is suppressed.
 
 VALIDATION
     --validate
@@ -485,6 +663,8 @@ def parse_args():
                         help="Run both algorithms and validate key invariants (may be slow without --max-*)")
     parser.add_argument("--confirm-basis", action="store_true",
                         help="Strongly confirm the produced path set is a true basis (GF(2) rank check)")
+    parser.add_argument("--json", action="store_true",
+                        help="Emit machine-readable JSON (schema_version 1.1) to stdout")
 
     parser.add_argument("--max-seconds", type=float, default=None,
                         help="Stop DFS after this many seconds (enumeration mode only)")
@@ -591,18 +771,163 @@ def _print_summary(label, nodes, edges, cyclo, basis_len):
 
 if __name__ == "__main__":
     args = parse_args()
-    t0 = time.perf_counter() if args.time else None
-
-    cfg = None
+    start_time = time.time()
 
     try:
-        cfg, start, end = ControlFlowGraph.from_file(args.filename, verbose=args.verbose)
+        cfg, start, end = ControlFlowGraph.from_file(args.filename)
 
+        # Apply enumeration search limits (used by the DFS enumeration algorithm)
         cfg.max_seconds = args.max_seconds
         cfg.max_calls = args.max_calls
         cfg.max_paths = args.max_paths
 
+        # JSON mode: suppress human-readable printing and emit one JSON object.
+        if args.json:
+            if args.validate:
+                # Compute expected complexity on the relevant subgraph (same for both algorithms)
+                allowed_nodes, allowed_edges = cfg.relevant_subgraph(start, end)
+                Vp = len(allowed_nodes)
+                Ep = len(allowed_edges)
+                expected = Ep - Vp + 2
+
+                # Linear analysis
+                basis_linear = cfg.find_basis_set_linear(start, end)
+                linear_analysis = _analysis_dict(cfg, start, end, basis_linear, "linear", args.confirm_basis)
+
+                # Enumeration analysis
+                enum_completed = False
+                enum_error = None
+                basis_enum = None
+                enum_status = "OK"
+                stop_reason = "none"
+
+                try:
+                    basis_enum = cfg.find_basis_set(start, end)
+                    enum_completed = True
+                except SearchLimitReached as e:
+                    enum_completed = False
+                    enum_error = str(e)
+                    enum_status = "INCOMPLETE"
+                    # crude stop reason inference
+                    msg = str(e).lower()
+                    if "seconds" in msg or "time" in msg:
+                        stop_reason = "time limit"
+                    elif "calls" in msg:
+                        stop_reason = "call limit"
+                    elif "paths" in msg:
+                        stop_reason = "path limit"
+                    else:
+                        stop_reason = "limit"
+
+                if enum_completed:
+                    enum_analysis = _analysis_dict(cfg, start, end, basis_enum, "enumeration", args.confirm_basis)
+                    enum_analysis["status"] = "OK"
+                    enum_analysis["stop_reason"] = "none"
+                else:
+                    enum_analysis = _analysis_dict(cfg, start, end, [], "enumeration", args.confirm_basis)
+                    enum_analysis["status"] = "INCOMPLETE"
+                    enum_analysis["stop_reason"] = stop_reason
+                    enum_analysis["error"] = enum_error
+
+                # Validation agreement
+                ok_linear = (len(basis_linear) == expected)
+                ok_enum = enum_completed and (basis_enum is not None) and (len(basis_enum) == expected)
+
+                agree_cyclo = True  # both use same relevant-subgraph formula
+                agree_basis = enum_completed and (len(basis_enum) == len(basis_linear))
+
+                agree_confirm = None
+                if args.confirm_basis and enum_completed:
+                    agree_confirm = (linear_analysis["confirm_basis"]["pass"] == enum_analysis["confirm_basis"]["pass"])
+                elif args.confirm_basis and not enum_completed:
+                    agree_confirm = None
+
+                if not ok_linear:
+                    validation_status = "FAIL"
+                    reason = "linear basis size does not match cyclomatic complexity"
+                    exit_code = 1
+                elif not enum_completed:
+                    validation_status = "INCONCLUSIVE"
+                    reason = f"enumeration incomplete ({enum_error})"
+                    exit_code = 2
+                else:
+                    # both completed: decide pass/fail
+                    if ok_enum and linear_analysis["confirm_basis"]["pass"] in (True, None) and enum_analysis["confirm_basis"]["pass"] in (True, None):
+                        validation_status = "PASS"
+                        reason = "both algorithms produced valid bases"
+                        exit_code = 0
+                    else:
+                        validation_status = "FAIL"
+                        reason = "enumeration basis failed invariants or confirm-basis"
+                        exit_code = 1
+
+                analysis_obj = {
+                    "linear": linear_analysis,
+                    "enumeration": enum_analysis,
+                    "validation": {
+                        "status": validation_status,
+                        "reason": reason,
+                        "agreement": {
+                            "cyclomatic_complexity": agree_cyclo,
+                            "basis_count": agree_basis,
+                            "confirm_basis_pass": agree_confirm
+                        }
+                    }
+                }
+
+                elapsed = time.time() - start_time
+                payload = make_json_payload(
+                    args=args, cfg=cfg, start=start, end=end,
+                    mode="validate", analysis_obj=analysis_obj,
+                    exit_code=exit_code,
+                    status=("OK" if validation_status == "PASS" else ("INCONCLUSIVE" if validation_status == "INCONCLUSIVE" else "FAIL")),
+                    message=f"Validation result: {validation_status}",
+                    elapsed_seconds=elapsed
+                )
+                print(json.dumps(payload, indent=2))
+                sys.exit(exit_code)
+
+            else:
+                # Single run
+                if args.linear:
+                    basis_set = cfg.find_basis_set_linear(start, end)
+                    algorithm = "linear"
+                else:
+                    try:
+                        basis_set = cfg.find_basis_set(start, end)
+                        algorithm = "enumeration"
+                    except SearchLimitReached as e:
+                        elapsed = time.time() - start_time
+                        # Emit JSON with empty basis and ERROR status
+                        analysis_obj = _analysis_dict(cfg, start, end, [], "enumeration", args.confirm_basis)
+                        payload = make_json_payload(
+                            args=args, cfg=cfg, start=start, end=end,
+                            mode="single", analysis_obj=analysis_obj,
+                            exit_code=2, status="INCONCLUSIVE",
+                            message=f"Stopped early due to search limits: {e}",
+                            elapsed_seconds=elapsed
+                        )
+                        print(json.dumps(payload, indent=2))
+                        sys.exit(2)
+
+                analysis_obj = _analysis_dict(cfg, start, end, basis_set, algorithm, args.confirm_basis)
+
+                elapsed = time.time() - start_time
+                exit_code = 0
+                status = "OK"
+                message = "Basis paths computed successfully"
+                payload = make_json_payload(
+                    args=args, cfg=cfg, start=start, end=end,
+                    mode="single", analysis_obj=analysis_obj,
+                    exit_code=exit_code, status=status, message=message,
+                    elapsed_seconds=elapsed
+                )
+                print(json.dumps(payload, indent=2))
+                sys.exit(0)
+
+        # Non-JSON mode (original behavior)
         if args.validate:
+            # (existing validate logic preserved)
             # Compute expected complexity on the relevant subgraph
             allowed, allowed_edges = cfg.relevant_subgraph(start, end)
             Vp = len(allowed)
@@ -631,7 +956,6 @@ if __name__ == "__main__":
             if args.confirm_basis:
                 ok_basis_linear, _, _ = confirm_basis(cfg, start, end, basis_linear, "LINEAR")
                 if not ok_basis_linear:
-                    # If the linear basis fails strong confirmation, validation is a definite FAIL.
                     print("Validation result: FAIL (linear basis failed --confirm-basis)")
                     sys.exit(1)
 
@@ -687,12 +1011,18 @@ if __name__ == "__main__":
         if args.linear:
             basis_set = cfg.find_basis_set_linear(start, end)
         else:
-            basis_set = cfg.find_basis_set(start, end)
+            try:
+                basis_set = cfg.find_basis_set(start, end)
+            except SearchLimitReached as e:
+                print(f"Stopped early due to search limits: {e}")
+                print(f"Progress so far: calls={cfg.dfs_calls}, paths_found={len(cfg.paths)}")
+                sys.exit(2)
 
         print("Basis Set of Paths:")
         for path in basis_set:
             print(" -> ".join(path))
 
+        # Print the number of basis paths, nodes, edges, and computed cyclomatic complexity
         print(f"Number of Nodes: {cfg.num_nodes}")
         print(f"Number of Edges: {cfg.num_edges}")
         print(f"Cyclomatic Complexity (Expected Basis Paths): {cfg.cyclomatic_complexity}")
@@ -703,15 +1033,13 @@ if __name__ == "__main__":
             if not ok_basis:
                 sys.exit(1)
 
-    except SearchLimitReached as e:
-        # Non-validate runs still use the global handler
-        print(f"Stopped early due to search limits: {e}")
-        calls = getattr(cfg, "dfs_calls", 0) if cfg is not None else 0
-        paths_found = len(getattr(cfg, "paths", [])) if cfg is not None else 0
-        print(f"Progress so far: calls={calls}, paths_found={paths_found}")
-        sys.exit(1)
-
-    finally:
-        if args.time and t0 is not None:
-            elapsed = time.perf_counter() - t0
+        if args.time:
+            elapsed = time.time() - start_time
             print(f"Elapsed Time (seconds): {elapsed:.6f}")
+
+        sys.exit(0)
+
+    except KeyboardInterrupt:
+        # Preserve existing behavior for Ctrl+C
+        print("Error: Interrupted by user.")
+        sys.exit(130)
