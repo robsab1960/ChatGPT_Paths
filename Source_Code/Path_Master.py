@@ -1,4 +1,4 @@
-# Version 67
+# Version 68
 #
 # Improves --validate behavior when enumeration hits search limits.
 # Adds --confirm-basis (strong rank-based validation of basis-ness).
@@ -406,7 +406,7 @@ class ControlFlowGraph:
         if self.verbose:
             print("[INFO] Extracting basis set...")
 
-        basis = self._extract_basis_set_from_enumerated_paths()
+        basis = self._extract_basis_set_from_enumerated_paths(start, end)
 
         if self.verbose:
             print(f"[INFO] Basis extraction complete: basis_paths={len(basis)}")
@@ -443,32 +443,78 @@ class ControlFlowGraph:
 
         path.pop()
 
-    def _extract_basis_set_from_enumerated_paths(self):
-        # Cyclomatic complexity computed on the full parsed graph (unchanged behavior)
-        num_nodes = len(self.nodes)
-        num_edges = len(self.edges)
-        expected_basis_size = num_edges - num_nodes + 2
+    def _extract_basis_set_from_enumerated_paths(self, start, end):
+        """Select a true basis from enumerated paths using a rank-greedy rule.
+
+        We treat each START→END path as an edge-incidence vector over GF(2)
+        (mod-2 parity of edge traversals). A set of paths is a *basis* iff the
+        incidence vectors are linearly independent and span the path space.
+
+        This selector walks the enumerated paths in order and keeps a path only
+        if it *increases the current GF(2) rank*. This prevents the classic
+        failure mode where 'new-looking' paths are actually dependent because
+        repeated edges/cycles cancel mod 2.
+        """
+        # Compute cyclomatic complexity on the START→END relevant subgraph
+        allowed_nodes, allowed_edges = self.relevant_subgraph(start, end)
+        Vp = len(allowed_nodes)
+        Ep = len(allowed_edges)
+        expected_basis_size = Ep - Vp + 2
+
+        # Build an index for incidence masks on the relevant edge set
+        _, edge_to_index = build_edge_index(allowed_edges)
 
         basis_set = []
-        covered_edges = set()
+        pivots = {}  # maps pivot_bit -> row mask (Gaussian elimination state over GF(2))
 
+        def try_add_to_rank(mask: int) -> bool:
+            """Attempt to add mask to the current span; return True iff rank increases."""
+            x = mask
+            # Reduce x by existing pivots (highest bits first)
+            for pb in sorted(pivots.keys(), reverse=True):
+                if (x >> pb) & 1:
+                    x ^= pivots[pb]
+            if x == 0:
+                return False  # dependent
+
+            # New pivot: highest set bit of x
+            new_pb = x.bit_length() - 1
+
+            # Optional: keep basis reduced by eliminating new pivot from existing rows
+            for pb in list(pivots.keys()):
+                if (pivots[pb] >> new_pb) & 1:
+                    pivots[pb] ^= x
+
+            pivots[new_pb] = x
+            return True
+
+        # Greedily keep paths that increase rank
         for path in self.paths:
-            path_edges = {(path[i], path[i + 1]) for i in range(len(path) - 1)}
-            if not path_edges.issubset(covered_edges):
+            mask = path_to_incidence_mask(path, edge_to_index)
+            if mask is None:
+                # Path contains an edge outside the relevant subgraph; skip it.
+                # (This should be rare; enumerated START→END paths are usually relevant.)
+                continue
+
+            if try_add_to_rank(mask):
                 basis_set.append(path)
-                covered_edges.update(path_edges)
+
             if len(basis_set) >= expected_basis_size:
                 break
 
+        # If enumeration did not provide enough independent paths (rare), top up to the
+        # expected count with remaining paths so output size stays consistent. Strong
+        # checking (--confirm-basis) will still report FAIL in this case.
         if len(basis_set) < expected_basis_size:
-            remaining_paths = [p for p in self.paths if p not in basis_set]
-            for path in remaining_paths:
+            for path in self.paths:
+                if path in basis_set:
+                    continue
                 basis_set.append(path)
                 if len(basis_set) >= expected_basis_size:
                     break
 
-        self.num_nodes = num_nodes
-        self.num_edges = num_edges
+        self.num_nodes = Vp
+        self.num_edges = Ep
         self.basis_path_count = len(basis_set)
         self.cyclomatic_complexity = expected_basis_size
         return basis_set
