@@ -1,4 +1,4 @@
-# Version 65
+# Version 67
 #
 # Improves --validate behavior when enumeration hits search limits.
 # Adds --confirm-basis (strong rank-based validation of basis-ness).
@@ -76,9 +76,7 @@ def _analysis_dict(cfg, start, end, basis_paths, algorithm, confirm_enabled):
             "pass": None,
             "failure_reason": None
         },
-        "performance": {
-            "elapsed_seconds": None
-        }
+        "performance": {"elapsed_seconds": None, "elapsed_nanoseconds": None}
     }
 
     if confirm_enabled and basis_paths is not None:
@@ -170,11 +168,13 @@ def make_json_payload(args, cfg, start, end, mode, analysis_obj, exit_code, stat
     if mode == "validate":
         if "linear" in payload["results"]["analysis"]:
             payload["results"]["analysis"]["linear"]["performance"]["elapsed_seconds"] = elapsed_seconds
+            payload["results"]["analysis"]["linear"]["performance"]["elapsed_nanoseconds"] = int(elapsed_seconds * 1_000_000_000) if elapsed_seconds is not None else None
         if "enumeration" in payload["results"]["analysis"]:
             payload["results"]["analysis"]["enumeration"]["performance"]["elapsed_seconds"] = elapsed_seconds
+            payload["results"]["analysis"]["enumeration"]["performance"]["elapsed_nanoseconds"] = int(elapsed_seconds * 1_000_000_000) if elapsed_seconds is not None else None
     else:
         payload["results"]["analysis"]["performance"]["elapsed_seconds"] = elapsed_seconds
-
+        payload["results"]["analysis"]["performance"]["elapsed_nanoseconds"] = int(elapsed_seconds * 1_000_000_000) if elapsed_seconds is not None else None
     return payload
 
 
@@ -778,8 +778,7 @@ def _print_summary(label, nodes, edges, cyclo, basis_len):
 
 if __name__ == "__main__":
     args = parse_args()
-    start_time = time.time()
-
+    start_time_ns = time.perf_counter_ns()
     try:
         cfg, start, end = ControlFlowGraph.from_file(args.filename)
 
@@ -882,7 +881,9 @@ if __name__ == "__main__":
                     }
                 }
 
-                elapsed = time.time() - start_time
+                elapsed_ns = time.perf_counter_ns() - start_time_ns
+
+                elapsed = elapsed_ns / 1_000_000_000.0
                 payload = make_json_payload(
                     args=args, cfg=cfg, start=start, end=end,
                     mode="validate", analysis_obj=analysis_obj,
@@ -904,7 +905,8 @@ if __name__ == "__main__":
                         basis_set = cfg.find_basis_set(start, end)
                         algorithm = "enumeration"
                     except SearchLimitReached as e:
-                        elapsed = time.time() - start_time
+                        elapsed_ns = time.perf_counter_ns() - start_time_ns
+                        elapsed = elapsed_ns / 1_000_000_000.0
                         # Emit JSON with empty basis and ERROR status
                         analysis_obj = _analysis_dict(cfg, start, end, [], "enumeration", args.confirm_basis)
                         payload = make_json_payload(
@@ -919,7 +921,9 @@ if __name__ == "__main__":
 
                 analysis_obj = _analysis_dict(cfg, start, end, basis_set, algorithm, args.confirm_basis)
 
-                elapsed = time.time() - start_time
+                elapsed_ns = time.perf_counter_ns() - start_time_ns
+
+                elapsed = elapsed_ns / 1_000_000_000.0
                 exit_code = 0
                 status = "OK"
                 message = "Basis paths computed successfully"
@@ -1041,8 +1045,9 @@ if __name__ == "__main__":
                 sys.exit(1)
 
         if args.time:
-            elapsed = time.time() - start_time
-            print(f"Elapsed Time (seconds): {elapsed:.6f}")
+            elapsed_ns = time.perf_counter_ns() - start_time_ns
+            elapsed = elapsed_ns / 1_000_000_000.0
+            print(f"Elapsed Time (seconds): {elapsed:.9f} (ns={int(elapsed*1_000_000_000)})")
 
         sys.exit(0)
 
