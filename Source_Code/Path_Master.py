@@ -1,4 +1,4 @@
-# Version 68
+# Version 73
 #
 # Improves --validate behavior when enumeration hits search limits.
 # Adds --confirm-basis (strong rank-based validation of basis-ness).
@@ -22,6 +22,91 @@ import platform
 import hashlib
 import datetime
 import json
+
+
+import traceback as _traceback
+
+# ----------------------------
+# JSON-first output policy
+# ----------------------------
+# If --json is present anywhere in argv, stdout MUST be a single JSON object
+# for both success and failure, regardless of failure stage (CLI parsing, missing file, etc).
+JSON_REQUESTED = ("--json" in sys.argv[1:])
+_JSON_EMITTED = False
+
+import builtins as _builtins
+_ORIG_PRINT = _builtins.print
+
+def _patched_print(*args, **kwargs):
+    # In --json mode, keep stdout clean for the single JSON object.
+    # Any incidental prints without an explicit destination are redirected to stderr.
+    if JSON_REQUESTED and ("file" not in kwargs or kwargs.get("file") is None):
+        kwargs["file"] = sys.stderr
+    return _ORIG_PRINT(*args, **kwargs)
+
+if JSON_REQUESTED:
+    _builtins.print = _patched_print
+
+def _stdout_print(*args, **kwargs):
+    # Always print to stdout (used for JSON emission).
+    kwargs["file"] = sys.stdout
+    return _ORIG_PRINT(*args, **kwargs)
+
+
+import builtins as _builtins
+_builtin_print = _builtins.print
+
+def _pm_print(*args, **kwargs):
+    """Human-readable output. In --json mode, route to stderr by default."""
+    if JSON_REQUESTED and "file" not in kwargs:
+        kwargs["file"] = sys.stderr
+    _builtin_print(*args, **kwargs)
+
+# Harden: if JSON was requested, any accidental print() goes to stderr (never stdout).
+if JSON_REQUESTED:
+    print = _pm_print
+def _emit_json(payload: dict) -> None:
+    """Emit exactly one JSON object to stdout."""
+    global _JSON_EMITTED
+    _JSON_EMITTED = True
+    sys.stdout.write(json.dumps(payload, indent=2))
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+
+def _json_error_payload(*, args_obj=None, exit_code: int, message: str, error_code: str, details: dict | None = None, filename: str | None = None) -> dict:
+    # Keep this minimal and stable. Extra noisy fields should go into details and be normalized in tests.
+    return {
+        "schema_version": "1.1",
+        "run": {
+            "argv": sys.argv[1:],
+            "json_requested": True,
+            "filename": filename,
+        },
+        "results": {
+            "summary": {
+                "exit_code": exit_code,
+                "status": "ERROR",
+                "message": message,
+            },
+            "error": {
+                "code": error_code,
+                "message": message,
+                "details": details or {},
+            },
+        },
+    }
+
+class _CliUsageError(Exception):
+    pass
+
+class _ToolExit(Exception):
+    """Structured termination with an exit code and JSON-friendly fields."""
+    def __init__(self, exit_code: int, error_code: str, message: str, details: dict | None = None):
+        super().__init__(message)
+        self.exit_code = int(exit_code)
+        self.error_code = str(error_code)
+        self.message = str(message)
+        self.details = details or {}
 
 
 def _sha256_file(path):
@@ -217,7 +302,11 @@ ALGORITHMS
 JSON OUTPUT
     --json
         Emit a single JSON object to stdout (schema_version 1.1). When enabled,
-        human-readable output is suppressed.
+        human-readable output is suppressed and all logs/errors go to stderr.
+
+        Rule: if --json is present anywhere in argv, Path_Master will still emit
+        a JSON object even if it fails before reading/parsing the input file
+        (e.g., missing file or command-line usage errors).
 
 VALIDATION
     --validate
@@ -255,8 +344,8 @@ DIAGNOSTICS
 EXIT STATUS
     0   Success. Basis paths computed successfully or validation passed.
 
-    1   Failure. A validation check failed, an invariant was violated,
-        or --confirm-basis reported a non-basis path set.
+    1   Failure. Any non-inconclusive error (including missing/invalid input),
+        failed invariants, or --confirm-basis failure.
 
     2   Inconclusive. Enumeration stopped early due to a search limit
         (--max-seconds, --max-calls, or --max-paths).
@@ -306,13 +395,21 @@ class ControlFlowGraph:
 
         # Detect control characters in node names
         if any(ord(c) < 32 or ord(c) == 127 for c in (u + v)):
-            print(f"Error: Invalid node name detected: '{u}' or '{v}' contains control characters.")
-            sys.exit(1)
+            raise _ToolExit(
+                exit_code=1,
+                error_code="INPUT_INVALID",
+                message=f"Invalid node name detected: '{u}' or '{v}' contains control characters.",
+                details={"u": u, "v": v},
+            )
 
         # Validate node names (must be alphanumeric, underscores, or hyphens)
         if not re.match(r'^[\w-]+$', u) or not re.match(r'^[\w-]+$', v):
-            print(f"Error: Invalid node name: '{u}' or '{v}' (contains spaces or special characters)")
-            sys.exit(1)
+            raise _ToolExit(
+                exit_code=1,
+                error_code="INPUT_INVALID",
+                message=f"Invalid node name: '{u}' or '{v}' (contains spaces or special characters)",
+                details={"u": u, "v": v},
+            )
 
         self.graph[u].append(v)
         self.edges.add((u, v))
@@ -400,8 +497,12 @@ class ControlFlowGraph:
             print(f"[INFO] DFS complete: calls={self.dfs_calls}, total_paths={len(self.paths)}")
 
         if not self.paths:
-            print("Error: No paths found from start to end.")
-            sys.exit(1)
+            raise _ToolExit(
+                exit_code=1,
+                error_code="NO_PATHS",
+                message="No paths found from start to end.",
+                details={"start": start, "end": end},
+            )
 
         if self.verbose:
             print("[INFO] Extracting basis set...")
@@ -571,8 +672,12 @@ class ControlFlowGraph:
 
         allowed, allowed_edges = self.relevant_subgraph(start, end)
         if start not in allowed or end not in allowed:
-            print("Error: No paths found from start to end.")
-            sys.exit(1)
+            raise _ToolExit(
+                exit_code=1,
+                error_code="NO_PATHS",
+                message="No paths found from start to end.",
+                details={"start": start, "end": end},
+            )
 
         rev = self._reverse_adjacency()
         parent = self._build_forward_tree_parents(start, allowed)
@@ -580,8 +685,12 @@ class ControlFlowGraph:
 
         base = self._path_start_to(parent, end)
         if base is None:
-            print("Error: No paths found from start to end.")
-            sys.exit(1)
+            raise _ToolExit(
+                exit_code=1,
+                error_code="NO_PATHS",
+                message="No paths found from start to end.",
+                details={"start": start, "end": end},
+            )
 
         tree_edges = set()
         for node, p in parent.items():
@@ -636,40 +745,69 @@ class ControlFlowGraph:
             with open(filename, 'r') as file:
                 lines = file.read().splitlines()
         except FileNotFoundError:
-            print(f"Error: File '{filename}' not found.")
-            sys.exit(1)
+            # In --json mode, stdout must still be JSON. Raise a structured error and let main handle formatting.
+            raise _ToolExit(
+                exit_code=1,
+                error_code="INPUT_NOT_FOUND",
+                message=f"File '{filename}' not found.",
+                details={"path": filename},
+            )
 
         if not lines or all(line.strip() == "" for line in lines):
-            print("Error: Input file is empty or contains only whitespace.")
-            sys.exit(1)
+            raise _ToolExit(
+                exit_code=1,
+                error_code="INPUT_EMPTY",
+                message="Input file is empty or contains only whitespace.",
+                details={"path": filename},
+            )
 
         while lines and lines[-1].strip() == "":
             lines.pop()
 
         if len(lines[1:-1]) == 0:
-            print("Error: No edges defined in the input file.")
-            sys.exit(1)
+            raise _ToolExit(
+                exit_code=1,
+                error_code="INPUT_INVALID",
+                message="No edges defined in the input file.",
+                details={"path": filename},
+            )
 
         for line in lines[1:-1]:
             parts = line.split()
             if len(parts) < 2:
-                print(f"Error: Edge definition '{line}' is incomplete. Expected format: 'NODE1 NODE2'")
-                sys.exit(1)
+                raise _ToolExit(
+                    exit_code=1,
+                    error_code="INPUT_INVALID",
+                    message=f"Edge definition '{line}' is incomplete. Expected format: 'NODE1 NODE2'",
+                    details={"line": line, "path": filename},
+                )
             if len(parts) > 2:
-                print(f"Error: Edge definition '{line}' has too many nodes. Expected format: 'NODE1 NODE2'")
-                sys.exit(1)
+                raise _ToolExit(
+                    exit_code=1,
+                    error_code="INPUT_INVALID",
+                    message=f"Edge definition '{line}' has too many nodes. Expected format: 'NODE1 NODE2'",
+                    details={"line": line, "path": filename},
+                )
 
         seen_edges = set()
         for line in lines[1:-1]:
             u, v = map(str.strip, line.split())
             if (u, v) in seen_edges:
-                print(f"Error: Duplicate edge detected: '{u} -> {v}'")
-                sys.exit(1)
+                raise _ToolExit(
+                    exit_code=1,
+                    error_code="INPUT_INVALID",
+                    message=f"Duplicate edge detected: '{u} -> {v}'",
+                    details={"u": u, "v": v, "path": filename},
+                )
             seen_edges.add((u, v))
 
         if len(lines) < 3:
-            print("Error: Invalid input file format. Expected at least a start node, edges, and an end node.")
-            sys.exit(1)
+            raise _ToolExit(
+                exit_code=1,
+                error_code="INPUT_INVALID",
+                message="Invalid input file format. Expected at least a start node, edges, and an end node.",
+                details={"path": filename},
+            )
 
         start = lines[0].strip()
         end = lines[-1].strip()
@@ -678,22 +816,38 @@ class ControlFlowGraph:
         for line in lines[1:-1]:
             u, v = map(str.strip, line.split())
             if u == end:
-                print("Error: end node should not start an edge")
-                sys.exit(1)
+                raise _ToolExit(
+                    exit_code=1,
+                    error_code="INPUT_INVALID",
+                    message="End node should not start an edge.",
+                    details={"edge": [u, v], "end": end, "path": filename},
+                )
             if v == start:
-                print("Error: start node should not end an edge")
-                sys.exit(1)
+                raise _ToolExit(
+                    exit_code=1,
+                    error_code="INPUT_INVALID",
+                    message="Start node should not end an edge.",
+                    details={"edge": [u, v], "start": start, "path": filename},
+                )
 
         for line in lines[1:-1]:
             u, v = map(str.strip, line.split())
             cfg.add_edge(u, v)
 
         if start not in cfg.nodes:
-            print(f"Error: STARTING NODE '{start}' is missing.")
-            sys.exit(1)
+            raise _ToolExit(
+                exit_code=1,
+                error_code="INPUT_INVALID",
+                message=f"STARTING NODE '{start}' is missing.",
+                details={"start": start, "path": filename},
+            )
         if end not in cfg.nodes:
-            print(f"Error: ENDING NODE '{end}' is missing.")
-            sys.exit(1)
+            raise _ToolExit(
+                exit_code=1,
+                error_code="INPUT_INVALID",
+                message=f"ENDING NODE '{end}' is missing.",
+                details={"end": end, "path": filename},
+            )
 
         if verbose:
             print(f"[INFO] Parsed CFG: nodes={len(cfg.nodes)}, edges={len(cfg.edges)}, start={start}, end={end}")
@@ -823,9 +977,55 @@ def _print_summary(label, nodes, edges, cyclo, basis_len):
 
 
 if __name__ == "__main__":
-    args = parse_args()
     start_time_ns = time.perf_counter_ns()
+    # Early intercept: in JSON mode, --help/-h returns one JSON object (and does not print argparse help text).
+    if JSON_REQUESTED and ("--help" in sys.argv[1:] or "-h" in sys.argv[1:]):
+        # Reconstruct a parser solely to obtain help text (must mirror parse_args()).
+        parser = argparse.ArgumentParser(
+            prog=os.path.basename(__file__),
+            description="Compute a basis set of paths from a control flow graph.",
+            epilog=HELP_EPILOG,
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        parser.add_argument("filename", nargs="?", help="Input CFG text file")
+        parser.add_argument("-t", "--time", action="store_true", help="Print elapsed execution time")
+        parser.add_argument("-v", "--verbose", action="store_true", help="Print debugging output")
+        parser.add_argument("--linear", action="store_true", help="Run the linear algorithm")
+        parser.add_argument("--validate", action="store_true", help="Run both algorithms and validate invariants")
+        parser.add_argument("--confirm-basis", action="store_true", help="Confirm basis independence using XOR rank")
+        parser.add_argument("--json", action="store_true", help="Emit JSON on stdout (always, even on errors)")
+        parser.add_argument("--max-seconds", type=float, default=None, help="Stop enumeration after this many seconds (inconclusive)")
+        parser.add_argument("--max-calls", type=int, default=None, help="Stop enumeration after this many DFS calls (inconclusive)")
+        parser.add_argument("--max-paths", type=int, default=None, help="Stop enumeration after enumerating this many paths (inconclusive)")
+
+        help_text = parser.format_help()
+        _emit_json({
+            "schema_version": "1.1",
+            "run": {"argv": sys.argv[1:], "tool": {"name": "Path_Master", "version": _extract_version_number()}},
+            "options": {"json": True},
+            "results": {"summary": {"exit_code": 0, "status": "OK", "message": "Help text"}, "help": {"text": help_text}},
+        })
+        sys.exit(0)
+
     try:
+        # Parse args. If --json was requested, emit JSON even for CLI/usage failures.
+        try:
+            args = parse_args()
+            if getattr(args, 'json', False):
+                args.verbose = False
+        except SystemExit as e:
+            # argparse terminated early (usage error). In JSON mode we still emit exactly one JSON object.
+            if JSON_REQUESTED:
+                payload = _json_error_payload(
+                    exit_code=1,
+                    message="Command-line usage error.",
+                    error_code="CLI_USAGE",
+                    details={"system_exit_code": getattr(e, "code", None)},
+                    filename=None,
+                )
+                _emit_json(payload)
+                raise SystemExit(1)
+            raise
         cfg, start, end = ControlFlowGraph.from_file(args.filename)
 
         # Apply enumeration search limits (used by the DFS enumeration algorithm)
@@ -938,7 +1138,7 @@ if __name__ == "__main__":
                     message=f"Validation result: {validation_status}",
                     elapsed_seconds=elapsed
                 )
-                print(json.dumps(payload, indent=2))
+                _emit_json(payload)
                 sys.exit(exit_code)
 
             else:
@@ -962,7 +1162,7 @@ if __name__ == "__main__":
                             message=f"Stopped early due to search limits: {e}",
                             elapsed_seconds=elapsed
                         )
-                        print(json.dumps(payload, indent=2))
+                        _emit_json(payload)
                         sys.exit(2)
 
                 analysis_obj = _analysis_dict(cfg, start, end, basis_set, algorithm, args.confirm_basis)
@@ -979,7 +1179,7 @@ if __name__ == "__main__":
                     exit_code=exit_code, status=status, message=message,
                     elapsed_seconds=elapsed
                 )
-                print(json.dumps(payload, indent=2))
+                _emit_json(payload)
                 sys.exit(0)
 
         # Non-JSON mode (original behavior)
@@ -1097,7 +1297,98 @@ if __name__ == "__main__":
 
         sys.exit(0)
 
+    except FileNotFoundError as e:
+        if JSON_REQUESTED or getattr(locals().get("args", None), "json", False):
+            payload = _json_error_payload(
+                exit_code=1,
+                message=str(e),
+                error_code="INPUT_NOT_FOUND",
+                details={"exception_type": type(e).__name__},
+                filename=getattr(locals().get("args", None), "filename", None),
+            )
+            _emit_json(payload)
+            sys.exit(1)
+        raise
+
+    except ValueError as e:
+        if JSON_REQUESTED or getattr(locals().get("args", None), "json", False):
+            payload = _json_error_payload(
+                exit_code=1,
+                message=str(e),
+                error_code="INPUT_FORMAT",
+                details={"exception_type": type(e).__name__},
+                filename=getattr(locals().get("args", None), "filename", None),
+            )
+            _emit_json(payload)
+            sys.exit(1)
+        raise
+
+    except _ToolExit as e:
+        # Known/expected failures (missing file, parse error, etc.)
+        if JSON_REQUESTED or getattr(locals().get('args', None), 'json', False):
+            payload = _json_error_payload(
+                exit_code=e.exit_code,
+                message=e.message,
+                error_code=e.error_code,
+                details=e.details,
+                filename=getattr(locals().get('args', None), 'filename', None),
+            )
+            _emit_json(payload)
+            sys.exit(e.exit_code)
+        # Non-JSON mode: human-readable to stderr
+        print(f"Error: {e.message}", file=sys.stderr)
+        sys.exit(e.exit_code)
+
+    except SystemExit as e:
+        # sys.exit(...) can still be triggered in deep code paths.
+        # In --json mode, ensure we still emit a JSON envelope and keep stdout valid.
+        if _JSON_EMITTED:
+            raise
+        if JSON_REQUESTED or getattr(locals().get('args', None), 'json', False):
+            code_ = getattr(e, "code", 1)
+            try:
+                code_ = int(code_) if code_ is not None else 1
+            except Exception:
+                code_ = 1
+            if code_ == 0:
+                raise
+            payload = _json_error_payload(
+                exit_code=(2 if code_ == 2 else 1),
+                message="Terminated early.",
+                error_code=("INCONCLUSIVE" if code_ == 2 else "ERROR"),
+                details={"system_exit_code": getattr(e, "code", None)},
+                filename=getattr(locals().get('args', None), 'filename', None),
+            )
+            _emit_json(payload)
+            sys.exit(payload["results"]["summary"]["exit_code"])
+        raise
+
+    except Exception as e:
+        # Unexpected crash: keep traceback on stderr; JSON envelope on stdout if requested.
+        _traceback.print_exc(file=sys.stderr)
+        if JSON_REQUESTED or getattr(locals().get("args", None), "json", False):
+            payload = _json_error_payload(
+                exit_code=1,
+                message=f"Internal error: {type(e).__name__}",
+                error_code="INTERNAL",
+                details={"exception_type": type(e).__name__},
+                filename=getattr(locals().get("args", None), "filename", None),
+            )
+            _emit_json(payload)
+            sys.exit(1)
+        raise
+
     except KeyboardInterrupt:
-        # Preserve existing behavior for Ctrl+C
-        print("Error: Interrupted by user.")
+        # Ctrl+C / SIGINT
+        if JSON_REQUESTED or getattr(locals().get('args', None), 'json', False):
+            payload = _json_error_payload(
+                exit_code=130,
+                message="Interrupted by user (Ctrl+C / SIGINT).",
+                error_code="INTERRUPTED",
+                details={},
+                filename=getattr(locals().get('args', None), 'filename', None),
+            )
+            _emit_json(payload)
+            sys.exit(130)
+        print("Error: Interrupted by user.", file=sys.stderr)
         sys.exit(130)
