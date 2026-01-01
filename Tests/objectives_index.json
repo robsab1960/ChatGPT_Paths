@@ -1,0 +1,17 @@
+[
+  {
+    "nodeid": "Trials/test_liberty_network_basis.py::test_liberty_network_basis_enum_and_linear",
+    "objective": {
+      "id": "OBJ-LIB-001",
+      "text": "Confirm Path_Master.py can generate a set of basis paths for transactions to flow through the Liberty Network. For comparison purposes a baseline set of basis paths is generated with the java program paths.jar.",
+      "ideas": [
+        "Capabilities",
+        "Examples"
+      ]
+    },
+    "idea_tags_present": [
+      "capabilities",
+      "examples"
+    ]
+  }
+]

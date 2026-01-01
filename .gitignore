@@ -1,0 +1,14 @@
+# Test run artifacts (generated every pytest run)
+Test_Artifacts/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environments (if any)
+.venv/
+venv/
+
+# OS noise
+.DS_Store
+Thumbs.db
