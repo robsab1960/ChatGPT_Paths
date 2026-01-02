@@ -1,17 +1,236 @@
 [
   {
-    "nodeid": "Trials/test_liberty_network_basis.py::test_liberty_network_basis_enum_and_linear",
+    "nodeid": "Trials/test_failure_modes_trials.py::test_failure_modes_enum_and_linear[FM-001:Disconnected_from_END.txt]",
     "objective": {
-      "id": "OBJ-LIB-001",
-      "text": "Confirm Path_Master.py can generate a set of basis paths for transactions to flow through the Liberty Network. For comparison purposes a baseline set of basis paths is generated with the java program paths.jar.",
+      "id": "FM-001",
+      "text": "What if the END node is not connected to the directed graph using PathMaster.py in both enumerated or linear algorithm? Confirm error message is generated, confirm error return code is generated. Confirm basis paths are not generated.",
       "ideas": [
-        "Capabilities",
-        "Examples"
+        "Failure Modes"
       ]
     },
     "idea_tags_present": [
-      "capabilities",
-      "examples"
+      "failure_modes"
+    ]
+  },
+  {
+    "nodeid": "Trials/test_failure_modes_trials.py::test_failure_modes_enum_and_linear[FM-002:Disconnected_from_START.txt]",
+    "objective": {
+      "id": "FM-002",
+      "text": "What if the START node is not connected to the directed graph using PathMaster.py in both enumerated or linear algorithm? Confirm error message is generated, confirm error return code is generated. Confirm basis paths are not generated.",
+      "ideas": [
+        "Failure Modes"
+      ]
+    },
+    "idea_tags_present": [
+      "failure_modes"
+    ]
+  },
+  {
+    "nodeid": "Trials/test_failure_modes_trials.py::test_failure_modes_enum_and_linear[FM-003:Duplicate_Edges.txt]",
+    "objective": {
+      "id": "FM-003",
+      "text": "What if the same edge is duplicated in the directed graph using PathMaster.py in both enumerated or linear algorithm? Confirm error message is generated, confirm error return code is generated. Confirm basis paths are not generated.",
+      "ideas": [
+        "Failure Modes"
+      ]
+    },
+    "idea_tags_present": [
+      "failure_modes"
+    ]
+  },
+  {
+    "nodeid": "Trials/test_failure_modes_trials.py::test_failure_modes_enum_and_linear[FM-004:End_In_Loop.txt]",
+    "objective": {
+      "id": "FM-004",
+      "text": "What if the End node is in a loop in the directed graph using PathMaster.py in both enumerated or linear algorithm? Confirm error message is generated, confirm error return code is generated. Confirm basis paths are not generated.",
+      "ideas": [
+        "Failure Modes"
+      ]
+    },
+    "idea_tags_present": [
+      "failure_modes"
+    ]
+  },
+  {
+    "nodeid": "Trials/test_failure_modes_trials.py::test_failure_modes_enum_and_linear[FM-005:File_Contains_Only_Whitespace.txt]",
+    "objective": {
+      "id": "FM-005",
+      "text": "What if the input file contains only white space using PathMaster.py in both enumerated or linear algorithm? Confirm error message is generated, confirm error return code is generated. Confirm basis paths are not generated.",
+      "ideas": [
+        "Failure Modes"
+      ]
+    },
+    "idea_tags_present": [
+      "failure_modes"
+    ]
+  },
+  {
+    "nodeid": "Trials/test_failure_modes_trials.py::test_failure_modes_enum_and_linear[FM-006:File_Is_Empty.txt]",
+    "objective": {
+      "id": "FM-006",
+      "text": "What if the input file is empty using PathMaster.py in both enumerated or linear algorithm? Confirm error message is generated, confirm error return code is generated. Confirm basis paths are not generated.",
+      "ideas": [
+        "Failure Modes"
+      ]
+    },
+    "idea_tags_present": [
+      "failure_modes"
+    ]
+  },
+  {
+    "nodeid": "Trials/test_failure_modes_trials.py::test_failure_modes_enum_and_linear[FM-007:Invalid_Edge_Formatting_too_few_nodes.txt]",
+    "objective": {
+      "id": "FM-007",
+      "text": "What if the input file includes an invalid edge which has too few nodes in it using PathMaster.py in both enumerated or linear algorithm? Confirm error message is generated, confirm error return code is generated. Confirm basis paths are not generated.",
+      "ideas": [
+        "Failure Modes"
+      ]
+    },
+    "idea_tags_present": [
+      "failure_modes"
+    ]
+  },
+  {
+    "nodeid": "Trials/test_failure_modes_trials.py::test_failure_modes_enum_and_linear[FM-008:Invalid_Edge_Formatting_too_many_nodes.txt]",
+    "objective": {
+      "id": "FM-008",
+      "text": "What if the input file includes an invalid edge which has too many nodes in it using PathMaster.py in both enumerated or linear algorithm? Confirm error message is generated, confirm error return code is generated. Confirm basis paths are not generated.",
+      "ideas": [
+        "Failure Modes"
+      ]
+    },
+    "idea_tags_present": [
+      "failure_modes"
+    ]
+  },
+  {
+    "nodeid": "Trials/test_failure_modes_trials.py::test_failure_modes_enum_and_linear[FM-009:invalid_node_char.txt]",
+    "objective": {
+      "id": "FM-009",
+      "text": "What if the input file includes an invalid character in a node using PathMaster.py in both enumerated or linear algorithm? Confirm error message is generated, confirm error return code is generated. Confirm basis paths are not generated.",
+      "ideas": [
+        "Failure Modes"
+      ]
+    },
+    "idea_tags_present": [
+      "failure_modes"
+    ]
+  },
+  {
+    "nodeid": "Trials/test_failure_modes_trials.py::test_failure_modes_enum_and_linear[FM-010:missing_edges.txt]",
+    "objective": {
+      "id": "FM-010",
+      "text": "What if the input file does not define any edges using PathMaster.py in both enumerated or linear algorithm? Confirm error message is generated, confirm error return code is generated. Confirm basis paths are not generated.",
+      "ideas": [
+        "Failure Modes"
+      ]
+    },
+    "idea_tags_present": [
+      "failure_modes"
+    ]
+  },
+  {
+    "nodeid": "Trials/test_failure_modes_trials.py::test_failure_modes_enum_and_linear[FM-011:missing_end.txt]",
+    "objective": {
+      "id": "FM-011",
+      "text": "What if the input file does not define an End node using PathMaster.py in both enumerated or linear algorithm? Confirm error message is generated, confirm error return code is generated. Confirm basis paths are not generated.",
+      "ideas": [
+        "Failure Modes"
+      ]
+    },
+    "idea_tags_present": [
+      "failure_modes"
+    ]
+  },
+  {
+    "nodeid": "Trials/test_failure_modes_trials.py::test_failure_modes_enum_and_linear[FM-012:missing_start.txt]",
+    "objective": {
+      "id": "FM-012",
+      "text": "What if the input file does not define a Start node using PathMaster.py in both enumerated or linear algorithm? Confirm error message is generated, confirm error return code is generated. Confirm basis paths are not generated.",
+      "ideas": [
+        "Failure Modes"
+      ]
+    },
+    "idea_tags_present": [
+      "failure_modes"
+    ]
+  },
+  {
+    "nodeid": "Trials/test_failure_modes_trials.py::test_failure_modes_enum_and_linear[FM-013:missing_start_and_end.txt]",
+    "objective": {
+      "id": "FM-013",
+      "text": "What if the input file does not define a Start node and does not define an End node using PathMaster.py in both enumerated or linear algorithm? Confirm error message is generated, confirm error return code is generated. Confirm basis paths are not generated.",
+      "ideas": [
+        "Failure Modes"
+      ]
+    },
+    "idea_tags_present": [
+      "failure_modes"
+    ]
+  },
+  {
+    "nodeid": "Trials/test_failure_modes_trials.py::test_failure_modes_enum_and_linear[FM-014:Start_and_End_In_Loop.txt]",
+    "objective": {
+      "id": "FM-014",
+      "text": "What if the input file defines a directed graph with both a Start Node in a loop and an End Node in a loop using PathMaster.py in both enumerated or linear algorithm? Confirm error message is generated, confirm error return code is generated. Confirm basis paths are not generated.",
+      "ideas": [
+        "Failure Modes"
+      ]
+    },
+    "idea_tags_present": [
+      "failure_modes"
+    ]
+  },
+  {
+    "nodeid": "Trials/test_failure_modes_trials.py::test_failure_modes_enum_and_linear[FM-015:Start_In_Loop.txt]",
+    "objective": {
+      "id": "FM-015",
+      "text": "What if the input file defines a directed graph with a Start Node in a loop using PathMaster.py in both enumerated or linear algorithm? Confirm error message is generated, confirm error return code is generated. Confirm basis paths are not generated.",
+      "ideas": [
+        "Failure Modes"
+      ]
+    },
+    "idea_tags_present": [
+      "failure_modes"
+    ]
+  },
+  {
+    "nodeid": "Trials/test_failure_modes_trials.py::test_failure_modes_enum_and_linear[FM-016:Trailing_Whitespace.txt]",
+    "objective": {
+      "id": "FM-016",
+      "text": "What if the input file defines a well defined directed graph followed by several lines of white space using PathMaster.py in both enumerated or linear algorithm? Confirm no error message is generated, confirm no error return code is generated. Confirm basis paths are generated.",
+      "ideas": [
+        "Failure Modes"
+      ]
+    },
+    "idea_tags_present": [
+      "failure_modes"
+    ]
+  },
+  {
+    "nodeid": "Trials/test_failure_modes_trials.py::test_failure_modes_enum_and_linear[FM-017:No_Such_File.txt]",
+    "objective": {
+      "id": "FM-017",
+      "text": "What if the input file does not exist using PathMaster.py in both enumerated or linear algorithm? Confirm error message is generated, confirm error return code is generated. Confirm basis paths are not generated.",
+      "ideas": [
+        "Failure Modes"
+      ]
+    },
+    "idea_tags_present": [
+      "failure_modes"
+    ]
+  },
+  {
+    "nodeid": "Trials/test_failure_modes_trials.py::test_failure_modes_enum_and_linear[FM-018:No_Paths.txt]",
+    "objective": {
+      "id": "FM-018",
+      "text": "What if the input file defines a directed graph with no path from the Start Node to the End Node using PathMaster.py in both enumerated or linear algorithm? Confirm error message is generated, confirm error return code is generated. Confirm basis paths are not generated.",
+      "ideas": [
+        "Failure Modes"
+      ]
+    },
+    "idea_tags_present": [
+      "failure_modes"
     ]
   }
 ]

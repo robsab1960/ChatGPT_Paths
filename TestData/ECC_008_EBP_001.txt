@@ -3,6 +3,4 @@ START A
 A B
 B C
 C END
-X Y
-Y Z
 END
